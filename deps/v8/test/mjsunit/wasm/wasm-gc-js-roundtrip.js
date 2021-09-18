@@ -18,15 +18,15 @@ let instance = (() => {
 
   builder.addFunction('struct_producer', makeSig([], [kWasmDataRef]))
       .addBody([
-        kGCPrefix, kExprRttCanon, struct, kGCPrefix, kExprStructNewDefault,
-        struct
+        kGCPrefix, kExprRttCanon, struct, kGCPrefix,
+        kExprStructNewDefaultWithRtt, struct
       ])
       .exportFunc();
 
   builder.addFunction('array_producer', makeSig([], [kWasmDataRef]))
       .addBody([
         kExprI32Const, 10, kGCPrefix, kExprRttCanon, array, kGCPrefix,
-        kExprArrayNewDefault, array
+        kExprArrayNewDefaultWithRtt, array
       ])
       .exportFunc();
 
@@ -57,7 +57,7 @@ let instance = (() => {
         .addBody([kExprLocalGet, 0])
         .exportFunc();
     builder.addFunction(key + '_null', makeSig([], [type]))
-        .addBody([kExprRefNull, test_types[key]])
+        .addBody([kExprRefNull, ...wasmSignedLeb(test_types[key])])
         .exportFunc();
   }
 

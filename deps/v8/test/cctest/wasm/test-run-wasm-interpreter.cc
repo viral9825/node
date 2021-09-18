@@ -504,6 +504,24 @@ TEST(Regress1092130) {
   r.Call();
 }
 
+TEST(Regress1247119) {
+  WasmRunner<uint32_t> r(TestExecutionTier::kInterpreter);
+  BUILD(r, kExprLoop, 0, kExprTry, 0, kExprUnreachable, kExprDelegate, 0,
+        kExprEnd);
+  r.Call();
+}
+
+TEST(Regress1246712) {
+  WasmRunner<uint32_t> r(TestExecutionTier::kInterpreter);
+  TestSignatures sigs;
+  const int kExpected = 1;
+  uint8_t except = r.builder().AddException(sigs.v_v());
+  BUILD(r, kExprTry, kWasmI32.value_type_code(), kExprTry,
+        kWasmI32.value_type_code(), kExprThrow, except, kExprEnd, kExprCatchAll,
+        kExprI32Const, kExpected, kExprEnd);
+  CHECK_EQ(kExpected, r.Call());
+}
+
 }  // namespace test_run_wasm_interpreter
 }  // namespace wasm
 }  // namespace internal

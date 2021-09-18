@@ -14,6 +14,7 @@
 #include "src/heap/heap-inl.h"
 #include "src/heap/heap.h"
 #include "src/heap/local-heap.h"
+#include "src/logging/counters-scopes.h"
 
 namespace v8 {
 namespace internal {
@@ -22,6 +23,10 @@ GlobalSafepoint::GlobalSafepoint(Heap* heap)
     : heap_(heap), local_heaps_head_(nullptr), active_safepoint_scopes_(0) {}
 
 void GlobalSafepoint::EnterSafepointScope(StopMainThread stop_main_thread) {
+  // Safepoints need to be initiated on the main thread.
+  DCHECK_EQ(ThreadId::Current(), heap_->isolate()->thread_id());
+  DCHECK_NULL(LocalHeap::Current());
+
   if (++active_safepoint_scopes_ > 1) return;
 
   TimedHistogramScope timer(
@@ -31,7 +36,6 @@ void GlobalSafepoint::EnterSafepointScope(StopMainThread stop_main_thread) {
   local_heaps_mutex_.Lock();
 
   barrier_.Arm();
-  DCHECK_NULL(LocalHeap::Current());
 
   int running = 0;
 
@@ -65,10 +69,12 @@ void GlobalSafepoint::EnterSafepointScope(StopMainThread stop_main_thread) {
 }
 
 void GlobalSafepoint::LeaveSafepointScope(StopMainThread stop_main_thread) {
+  // Safepoints need to be initiated on the main thread.
+  DCHECK_EQ(ThreadId::Current(), heap_->isolate()->thread_id());
+  DCHECK_NULL(LocalHeap::Current());
+
   DCHECK_GT(active_safepoint_scopes_, 0);
   if (--active_safepoint_scopes_ > 0) return;
-
-  DCHECK_NULL(LocalHeap::Current());
 
   for (LocalHeap* local_heap = local_heaps_head_; local_heap;
        local_heap = local_heap->next_) {

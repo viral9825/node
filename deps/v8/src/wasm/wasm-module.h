@@ -80,16 +80,16 @@ struct WasmGlobal {
   bool exported;  // true if exported.
 };
 
-// Note: An exception signature only uses the params portion of a
-// function signature.
-using WasmExceptionSig = FunctionSig;
+// Note: An exception tag signature only uses the params portion of a function
+// signature.
+using WasmTagSig = FunctionSig;
 
-// Static representation of a wasm exception type.
-struct WasmException {
-  explicit WasmException(const WasmExceptionSig* sig) : sig(sig) {}
+// Static representation of a wasm tag type.
+struct WasmTag {
+  explicit WasmTag(const WasmTagSig* sig) : sig(sig) {}
   const FunctionSig* ToFunctionSig() const { return sig; }
 
-  const WasmExceptionSig* sig;  // type signature of the exception.
+  const WasmTagSig* sig;  // type signature of the tag.
 };
 
 // Static representation of a wasm data segment.
@@ -259,6 +259,11 @@ struct V8_EXPORT_PRIVATE WasmDebugSymbols {
 
 struct WasmTable;
 
+// End of a chain of explicit supertypes.
+constexpr uint32_t kGenericSuperType = 0xFFFFFFFE;
+// Used for types that have no explicit supertype.
+constexpr uint32_t kNoSuperType = 0xFFFFFFFF;
+
 // Static representation of a module.
 struct V8_EXPORT_PRIVATE WasmModule {
   std::unique_ptr<Zone> signature_zone;
@@ -288,6 +293,7 @@ struct V8_EXPORT_PRIVATE WasmModule {
   WireBytesRef name = {0, 0};
   std::vector<TypeDefinition> types;  // by type index
   std::vector<uint8_t> type_kinds;    // by type index
+  std::vector<uint32_t> supertypes;   // by type index
   // Map from each type index to the index of its corresponding canonical type.
   // Note: right now, only functions are canonicalized, and arrays and structs
   // map to themselves.
@@ -295,9 +301,10 @@ struct V8_EXPORT_PRIVATE WasmModule {
 
   bool has_type(uint32_t index) const { return index < types.size(); }
 
-  void add_signature(const FunctionSig* sig) {
+  void add_signature(const FunctionSig* sig, uint32_t supertype) {
     types.push_back(TypeDefinition(sig));
     type_kinds.push_back(kWasmFunctionTypeCode);
+    supertypes.push_back(supertype);
     uint32_t canonical_id = sig ? signature_map.FindOrInsert(*sig) : 0;
     canonicalized_type_ids.push_back(canonical_id);
   }
@@ -309,9 +316,10 @@ struct V8_EXPORT_PRIVATE WasmModule {
     return types[index].function_sig;
   }
 
-  void add_struct_type(const StructType* type) {
+  void add_struct_type(const StructType* type, uint32_t supertype) {
     types.push_back(TypeDefinition(type));
     type_kinds.push_back(kWasmStructTypeCode);
+    supertypes.push_back(supertype);
     // No canonicalization for structs.
     canonicalized_type_ids.push_back(0);
   }
@@ -323,9 +331,10 @@ struct V8_EXPORT_PRIVATE WasmModule {
     return types[index].struct_type;
   }
 
-  void add_array_type(const ArrayType* type) {
+  void add_array_type(const ArrayType* type, uint32_t supertype) {
     types.push_back(TypeDefinition(type));
     type_kinds.push_back(kWasmArrayTypeCode);
+    supertypes.push_back(supertype);
     // No canonicalization for arrays.
     canonicalized_type_ids.push_back(0);
   }
@@ -337,12 +346,20 @@ struct V8_EXPORT_PRIVATE WasmModule {
     return types[index].array_type;
   }
 
+  uint32_t supertype(uint32_t index) const {
+    DCHECK(index < supertypes.size());
+    return supertypes[index];
+  }
+  bool has_supertype(uint32_t index) const {
+    return supertype(index) != kNoSuperType;
+  }
+
   std::vector<WasmFunction> functions;
   std::vector<WasmDataSegment> data_segments;
   std::vector<WasmTable> tables;
   std::vector<WasmImport> import_table;
   std::vector<WasmExport> export_table;
-  std::vector<WasmException> exceptions;
+  std::vector<WasmTag> tags;
   std::vector<WasmElemSegment> elem_segments;
   std::vector<WasmCompilationHint> compilation_hints;
   BranchHintInfo branch_hints;
@@ -396,8 +413,11 @@ size_t EstimateStoredSize(const WasmModule* module);
 V8_EXPORT_PRIVATE int MaxNumExportWrappers(const WasmModule* module);
 
 // Returns the wrapper index for a function in {module} with signature {sig}
-// and origin defined by {is_import}.
+// or {sig_index} and origin defined by {is_import}.
+// Prefer to use the {sig_index} consuming version, as it is much faster.
 int GetExportWrapperIndex(const WasmModule* module, const FunctionSig* sig,
+                          bool is_import);
+int GetExportWrapperIndex(const WasmModule* module, uint32_t sig_index,
                           bool is_import);
 
 // Return the byte offset of the function identified by the given index.
@@ -414,6 +434,12 @@ int GetContainingWasmFunction(const WasmModule* module, uint32_t byte_offset);
 // Will return preceding function if the byte offset is not
 // contained within a function.
 int GetNearestWasmFunction(const WasmModule* module, uint32_t byte_offset);
+
+// Gets the explicitly defined subtyping depth for the given type.
+// Returns 0 if the type has no explicit supertype.
+// The result is capped to {kV8MaxRttSubtypingDepth + 1}.
+// Invalid cyclic hierarchies will return -1.
+int GetSubtypingDepth(const WasmModule* module, uint32_t type_index);
 
 // Interface to the storage (wire bytes) of a wasm module.
 // It is illegal for anyone receiving a ModuleWireBytes to store pointers based
@@ -469,11 +495,13 @@ std::ostream& operator<<(std::ostream& os, const WasmFunctionName& name);
 V8_EXPORT_PRIVATE bool IsWasmCodegenAllowed(Isolate* isolate,
                                             Handle<Context> context);
 
-Handle<JSObject> GetTypeForFunction(Isolate* isolate, const FunctionSig* sig);
+Handle<JSObject> GetTypeForFunction(Isolate* isolate, const FunctionSig* sig,
+                                    bool for_exception = false);
 Handle<JSObject> GetTypeForGlobal(Isolate* isolate, bool is_mutable,
                                   ValueType type);
 Handle<JSObject> GetTypeForMemory(Isolate* isolate, uint32_t min_size,
-                                  base::Optional<uint32_t> max_size);
+                                  base::Optional<uint32_t> max_size,
+                                  bool shared);
 Handle<JSObject> GetTypeForTable(Isolate* isolate, ValueType type,
                                  uint32_t min_size,
                                  base::Optional<uint32_t> max_size);

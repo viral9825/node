@@ -654,7 +654,7 @@ class LiftoffAssembler : public TurboAssembler {
   inline void PrepareTailCall(int num_callee_stack_params,
                               int stack_param_delta);
   inline void AlignFrameSize();
-  inline void PatchPrepareStackFrame(int offset);
+  inline void PatchPrepareStackFrame(int offset, SafepointTableBuilder*);
   inline void FinishCode();
   inline void AbortCompilation();
   inline static constexpr int StaticStackFrameSize();
@@ -1456,12 +1456,12 @@ class LiftoffAssembler : public TurboAssembler {
   // Instrumentation for shadow-stack-compatible OSR on x64.
   inline void MaybeOSR();
 
-  // Set the i32 at address dst to 1 if src is a NaN.
+  // Set the i32 at address dst to a non-zero value if src is a NaN.
   inline void emit_set_if_nan(Register dst, DoubleRegister src, ValueKind kind);
 
   // Set the i32 at address dst to a non-zero value if src contains a NaN.
-  inline void emit_s128_set_if_nan(Register dst, DoubleRegister src,
-                                   Register tmp_gp, DoubleRegister tmp_fp,
+  inline void emit_s128_set_if_nan(Register dst, LiftoffRegister src,
+                                   Register tmp_gp, LiftoffRegister tmp_s128,
                                    ValueKind lane_kind);
 
   ////////////////////////////////////
@@ -1506,6 +1506,10 @@ class LiftoffAssembler : public TurboAssembler {
  private:
   LiftoffRegister LoadI64HalfIntoRegister(VarState slot, RegPairHalf half);
 
+  V8_NOINLINE LiftoffRegister SpillOneRegister(LiftoffRegList candidates);
+  // Spill one or two fp registers to get a pair of adjacent fp registers.
+  LiftoffRegister SpillAdjacentFpRegisters(LiftoffRegList pinned);
+
   uint32_t num_locals_ = 0;
   static constexpr uint32_t kInlineLocalKinds = 16;
   union {
@@ -1521,10 +1525,6 @@ class LiftoffAssembler : public TurboAssembler {
   int ool_spill_space_size_ = 0;
   LiftoffBailoutReason bailout_reason_ = kSuccess;
   const char* bailout_detail_ = nullptr;
-
-  V8_NOINLINE LiftoffRegister SpillOneRegister(LiftoffRegList candidates);
-  // Spill one or two fp registers to get a pair of adjacent fp registers.
-  LiftoffRegister SpillAdjacentFpRegisters(LiftoffRegList pinned);
 };
 
 std::ostream& operator<<(std::ostream& os, LiftoffAssembler::VarState);
@@ -1711,6 +1711,8 @@ bool CheckCompatibleStackSlotTypes(ValueKind a, ValueKind b);
 #include "src/wasm/baseline/mips/liftoff-assembler-mips.h"
 #elif V8_TARGET_ARCH_MIPS64
 #include "src/wasm/baseline/mips64/liftoff-assembler-mips64.h"
+#elif V8_TARGET_ARCH_LOONG64
+#include "src/wasm/baseline/loong64/liftoff-assembler-loong64.h"
 #elif V8_TARGET_ARCH_S390
 #include "src/wasm/baseline/s390/liftoff-assembler-s390.h"
 #elif V8_TARGET_ARCH_RISCV64

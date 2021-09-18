@@ -3,27 +3,18 @@
 // found in the LICENSE file.
 
 // Flags: --harmony-rab-gsab --allow-natives-syntax
+// Flags: --harmony-relative-indexing-methods
 
 "use strict";
 
-class MyUint8Array extends Uint8Array {};
+d8.file.execute('test/mjsunit/typedarray-helpers.js');
 
-const ctors = [
-  Uint8Array,
-  Int8Array,
-  Uint16Array,
-  Int16Array,
-  Int32Array,
-  Float32Array,
-  Float64Array,
-  Uint8ClampedArray,
-  BigUint64Array,
-  BigInt64Array,
-  MyUint8Array
-];
+function CreateResizableArrayBuffer(byteLength, maxByteLength) {
+  return new ArrayBuffer(byteLength, {maxByteLength: maxByteLength});
+}
 
 (function TypedArrayPrototype() {
-  const rab = new ResizableArrayBuffer(40, 80);
+  const rab = CreateResizableArrayBuffer(40, 80);
   const ab = new ArrayBuffer(80);
 
   for (let ctor of ctors) {
@@ -34,7 +25,7 @@ const ctors = [
 })();
 
 (function TypedArrayLengthAndByteLength() {
-  const rab = new ResizableArrayBuffer(40, 80);
+  const rab = CreateResizableArrayBuffer(40, 80);
 
   for (let ctor of ctors) {
     const ta = new ctor(rab, 0, 3);
@@ -77,7 +68,7 @@ const ctors = [
 })();
 
 (function ConstructInvalid() {
-  const rab = new ResizableArrayBuffer(40, 80);
+  const rab = CreateResizableArrayBuffer(40, 80);
 
   for (let ctor of ctors) {
     // Length too big.
@@ -107,7 +98,7 @@ const ctors = [
 })();
 
 (function TypedArrayLengthWhenResizedOutOfBounds1() {
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
 
   // Create TAs which cover the bytes 0-7.
   let tas_and_lengths = [];
@@ -146,7 +137,7 @@ const ctors = [
 
 // The previous test with offsets.
 (function TypedArrayLengthWhenResizedOutOfBounds2() {
-  const rab = new ResizableArrayBuffer(20, 40);
+  const rab = CreateResizableArrayBuffer(20, 40);
 
   // Create TAs which cover the bytes 8-15.
   let tas_and_lengths = [];
@@ -158,6 +149,7 @@ const ctors = [
   for (let [ta, length] of tas_and_lengths) {
     assertEquals(length, ta.length);
     assertEquals(length * ta.BYTES_PER_ELEMENT, ta.byteLength);
+    assertEquals(8, ta.byteOffset);
   }
 
   rab.resize(10);
@@ -165,6 +157,7 @@ const ctors = [
   for (let [ta, length] of tas_and_lengths) {
     assertEquals(0, ta.length);
     assertEquals(0, ta.byteLength);
+    assertEquals(0, ta.byteOffset);
   }
 
   // Resize the rab so that it just barely covers the needed 8 bytes.
@@ -173,6 +166,7 @@ const ctors = [
   for (let [ta, length] of tas_and_lengths) {
     assertEquals(length, ta.length);
     assertEquals(length * ta.BYTES_PER_ELEMENT, ta.byteLength);
+    assertEquals(8, ta.byteOffset);
   }
 
   rab.resize(40);
@@ -180,11 +174,12 @@ const ctors = [
   for (let [ta, length] of tas_and_lengths) {
     assertEquals(length, ta.length);
     assertEquals(length * ta.BYTES_PER_ELEMENT, ta.byteLength);
+    assertEquals(8, ta.byteOffset);
   }
 })();
 
 (function LengthTracking1() {
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
 
   let tas = [];
   for (let ctor of ctors) {
@@ -246,7 +241,7 @@ const ctors = [
 
 // The previous test with offsets.
 (function LengthTracking2() {
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
 
   const offset = 8;
   let tas = [];
@@ -257,12 +252,14 @@ const ctors = [
   for (let ta of tas) {
     assertEquals((16 - offset) / ta.BYTES_PER_ELEMENT, ta.length);
     assertEquals(16 - offset, ta.byteLength);
+    assertEquals(offset, ta.byteOffset);
   }
 
   rab.resize(40);
   for (let ta of tas) {
     assertEquals((40 - offset) / ta.BYTES_PER_ELEMENT, ta.length);
     assertEquals(40 - offset, ta.byteLength);
+    assertEquals(offset, ta.byteOffset);
   }
 
   // Resize to a number which is not a multiple of all byte_lengths.
@@ -271,6 +268,7 @@ const ctors = [
     const expected_length = Math.floor((20 - offset)/ ta.BYTES_PER_ELEMENT);
     assertEquals(expected_length, ta.length);
     assertEquals(expected_length * ta.BYTES_PER_ELEMENT, ta.byteLength);
+    assertEquals(offset, ta.byteOffset);
   }
 
   // Resize so that all TypedArrays go out of bounds (because of the offset).
@@ -279,6 +277,7 @@ const ctors = [
   for (let ta of tas) {
     assertEquals(0, ta.length);
     assertEquals(0, ta.byteLength);
+    assertEquals(0, ta.byteOffset);
   }
 
   rab.resize(0);
@@ -286,6 +285,7 @@ const ctors = [
   for (let ta of tas) {
     assertEquals(0, ta.length);
     assertEquals(0, ta.byteLength);
+    assertEquals(0, ta.byteOffset);
   }
 
   rab.resize(8);
@@ -293,6 +293,7 @@ const ctors = [
   for (let ta of tas) {
     assertEquals(0, ta.length);
     assertEquals(0, ta.byteLength);
+    assertEquals(offset, ta.byteOffset);
   }
 
   // Resize so that the TypedArrays which have element size > 1 go out of bounds
@@ -303,9 +304,11 @@ const ctors = [
     if (ta.BYTES_PER_ELEMENT == 1) {
       assertEquals(1, ta.length);
       assertEquals(1, ta.byteLength);
+      assertEquals(offset, ta.byteOffset);
     } else {
       assertEquals(0, ta.length);
       assertEquals(0, ta.byteLength);
+      assertEquals(offset, ta.byteOffset);
     }
   }
 
@@ -314,6 +317,7 @@ const ctors = [
   for (let ta of tas) {
     assertEquals((40 - offset) / ta.BYTES_PER_ELEMENT, ta.length);
     assertEquals(40 - offset, ta.byteLength);
+    assertEquals(offset, ta.byteOffset);
   }
 })();
 
@@ -322,7 +326,7 @@ const ctors = [
     if (ctor.BYTES_PER_ELEMENT != 1) {
       continue;
     }
-    const rab = new ResizableArrayBuffer(16, 40);
+    const rab = CreateResizableArrayBuffer(16, 40);
     const array = new ctor(rab, 0, 4);
 
     // Initial values
@@ -381,7 +385,7 @@ const ctors = [
     if (ctor.BYTES_PER_ELEMENT != 1) {
       continue;
     }
-    const rab = new ResizableArrayBuffer(16, 40);
+    const rab = CreateResizableArrayBuffer(16, 40);
     const array = new ctor(rab, 0, 4);
 
     // Within-bounds read
@@ -419,7 +423,7 @@ const ctors = [
   }
   %EnsureFeedbackVectorForFunction(ReadElement2);
 
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
 
   const i8a = new Int8Array(rab, 0, 4);
   for (let i = 0; i < 3; ++i) {
@@ -469,7 +473,7 @@ const ctors = [
   }
   %EnsureFeedbackVectorForFunction(HasElement2);
 
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
 
   const i8a = new Int8Array(rab, 0, 4);
 
@@ -499,13 +503,73 @@ const ctors = [
   }
 })();
 
+(function HasWithOffsetsWithFeedback() {
+  function GetElements(ta) {
+    let result = '';
+    for (let i = 0; i < 8; ++i) {
+      result += (i in ta) + ',';
+      //           ^ feedback will be here
+    }
+    return result;
+  }
+  %EnsureFeedbackVectorForFunction(GetElements);
+
+  const rab = CreateResizableArrayBuffer(4, 8);
+  const fixedLength = new Int8Array(rab, 0, 4);
+  const fixedLengthWithOffset = new Int8Array(rab, 1, 3);
+  const lengthTracking = new Int8Array(rab, 0);
+  const lengthTrackingWithOffset = new Int8Array(rab, 1);
+
+  assertEquals('true,true,true,true,false,false,false,false,',
+               GetElements(fixedLength));
+  assertEquals('true,true,true,false,false,false,false,false,',
+              GetElements(fixedLengthWithOffset));
+  assertEquals('true,true,true,true,false,false,false,false,',
+              GetElements(lengthTracking));
+  assertEquals('true,true,true,false,false,false,false,false,',
+              GetElements(lengthTrackingWithOffset));
+
+  rab.resize(2);
+
+  assertEquals('false,false,false,false,false,false,false,false,',
+               GetElements(fixedLength));
+  assertEquals('false,false,false,false,false,false,false,false,',
+              GetElements(fixedLengthWithOffset));
+  assertEquals('true,true,false,false,false,false,false,false,',
+              GetElements(lengthTracking));
+  assertEquals('true,false,false,false,false,false,false,false,',
+              GetElements(lengthTrackingWithOffset));
+
+  // Resize beyond the offset of the length tracking arrays.
+  rab.resize(1);
+  assertEquals('false,false,false,false,false,false,false,false,',
+               GetElements(fixedLength));
+  assertEquals('false,false,false,false,false,false,false,false,',
+              GetElements(fixedLengthWithOffset));
+  assertEquals('true,false,false,false,false,false,false,false,',
+              GetElements(lengthTracking));
+  assertEquals('false,false,false,false,false,false,false,false,',
+              GetElements(lengthTrackingWithOffset));
+
+  rab.resize(8);
+
+  assertEquals('true,true,true,true,false,false,false,false,',
+               GetElements(fixedLength));
+  assertEquals('true,true,true,false,false,false,false,false,',
+               GetElements(fixedLengthWithOffset));
+  assertEquals('true,true,true,true,true,true,true,true,',
+               GetElements(lengthTracking));
+  assertEquals('true,true,true,true,true,true,true,false,',
+               GetElements(lengthTrackingWithOffset));
+})();
+
 (function StoreToOutOfBoundsTypedArrayWithFeedback() {
   function WriteElement2(ta, i) {
     ta[2] = i;
   }
   %EnsureFeedbackVectorForFunction(WriteElement2);
 
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
 
   const i8a = new Int8Array(rab, 0, 4);
   assertEquals(0, i8a[2]);
@@ -554,7 +618,7 @@ const ctors = [
     return 2 in ta;
   }
 
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
   const i8a = new Int8Array(rab, 0, 4);
   i8a.__proto__ = {2: 'wrong value'};
   i8a[2] = 10;
@@ -576,7 +640,7 @@ const ctors = [
   %EnsureFeedbackVectorForFunction(ReadElement2);
   %EnsureFeedbackVectorForFunction(HasElement2);
 
-  const rab = new ResizableArrayBuffer(16, 40);
+  const rab = CreateResizableArrayBuffer(16, 40);
   const i8a = new Int8Array(rab, 0, 4);
   i8a.__proto__ = {2: 'wrong value'};
   i8a[2] = 10;
@@ -593,7 +657,7 @@ const ctors = [
 })();
 
 (function EnumerateElements() {
-  let rab = new ResizableArrayBuffer(100, 200);
+  let rab = CreateResizableArrayBuffer(100, 200);
   for (let ctor of ctors) {
     const ta = new ctor(rab, 0, 3);
     let keys = '';
@@ -611,28 +675,23 @@ const ctors = [
   function TestIteration(ta, expected) {
     let values = [];
     for (const value of ta) {
-      values.push(value);
+      values.push(Number(value));
     }
     assertEquals(expected, values);
   }
 
   for (let ctor of ctors) {
-    if (ctor == BigInt64Array || ctor == BigUint64Array) {
-      // This test doesn't work for BigInts.
-      continue;
-    }
-
     const buffer_byte_length = no_elements * ctor.BYTES_PER_ELEMENT;
     // We can use the same RAB for all the TAs below, since we won't modify it
     // after writing the initial values.
-    const rab = new ResizableArrayBuffer(buffer_byte_length,
+    const rab = CreateResizableArrayBuffer(buffer_byte_length,
                                          2 * buffer_byte_length);
     const byte_offset = offset * ctor.BYTES_PER_ELEMENT;
 
     // Write some data into the array.
     let ta_write = new ctor(rab);
     for (let i = 0; i < no_elements; ++i) {
-      ta_write[i] = i % 128;
+      WriteToTypedArray(ta_write, i, i % 128);
     }
 
     // Create various different styles of TypedArrays with the RAB as the
@@ -674,12 +733,12 @@ const ctors = [
 
 // Helpers for iteration tests.
 function CreateRab(buffer_byte_length, ctor) {
-  const rab = new ResizableArrayBuffer(buffer_byte_length,
-                                       2 * buffer_byte_length);
+  const rab = CreateResizableArrayBuffer(buffer_byte_length,
+                                         2 * buffer_byte_length);
   // Write some data into the array.
   let ta_write = new ctor(rab);
   for (let i = 0; i < buffer_byte_length / ctor.BYTES_PER_ELEMENT; ++i) {
-    ta_write[i] = i % 128;
+    WriteToTypedArray(ta_write, i, i % 128);
   }
   return rab;
 }
@@ -689,7 +748,7 @@ function TestIterationAndResize(ta, expected, rab, resize_after,
   let values = [];
   let resized = false;
   for (const value of ta) {
-    values.push(value);
+    values.push(Number(value));
     if (!resized && values.length == resize_after) {
       rab.resize(new_byte_length);
       resized = true;
@@ -704,10 +763,6 @@ function TestIterationAndResize(ta, expected, rab, resize_after,
   const offset = 2;
 
   for (let ctor of ctors) {
-    if (ctor == BigInt64Array || ctor == BigUint64Array) {
-      // This test doesn't work for BigInts.
-      continue;
-    }
     const buffer_byte_length = no_elements * ctor.BYTES_PER_ELEMENT;
     const byte_offset = offset * ctor.BYTES_PER_ELEMENT;
 
@@ -762,10 +817,6 @@ function TestIterationAndResize(ta, expected, rab, resize_after,
 
   // We need to recreate the RAB between all TA tests, since we grow it.
   for (let ctor of ctors) {
-    if (ctor == BigInt64Array || ctor == BigUint64Array) {
-      // This test doesn't work for BigInts.
-      continue;
-    }
     const buffer_byte_length = no_elements * ctor.BYTES_PER_ELEMENT;
     const byte_offset = offset * ctor.BYTES_PER_ELEMENT;
 
@@ -809,10 +860,6 @@ function TestIterationAndResize(ta, expected, rab, resize_after,
   const offset = 2;
 
   for (let ctor of ctors) {
-    if (ctor == BigInt64Array || ctor == BigUint64Array) {
-      // This test doesn't work for BigInts.
-      continue;
-    }
     const buffer_byte_length = no_elements * ctor.BYTES_PER_ELEMENT;
     const byte_offset = offset * ctor.BYTES_PER_ELEMENT;
 
@@ -869,10 +916,6 @@ function TestIterationAndResize(ta, expected, rab, resize_after,
   const offset = 2;
 
   for (let ctor of ctors) {
-    if (ctor == BigInt64Array || ctor == BigUint64Array) {
-      // This test doesn't work for BigInts.
-      continue;
-    }
     const buffer_byte_length = no_elements * ctor.BYTES_PER_ELEMENT;
     const byte_offset = offset * ctor.BYTES_PER_ELEMENT;
 
@@ -903,3 +946,281 @@ function TestIterationAndResize(ta, expected, rab, resize_after,
     });
   }
 }());
+
+(function Destructuring() {
+  for (let ctor of ctors) {
+    const rab = CreateResizableArrayBuffer(4 * ctor.BYTES_PER_ELEMENT,
+                                           8 * ctor.BYTES_PER_ELEMENT);
+    const fixedLength = new ctor(rab, 0, 4);
+    const fixedLengthWithOffset = new ctor(rab, 2 * ctor.BYTES_PER_ELEMENT, 2);
+    const lengthTracking = new ctor(rab, 0);
+    const lengthTrackingWithOffset = new ctor(rab, 2 * ctor.BYTES_PER_ELEMENT);
+
+    // Write some data into the array.
+    let ta_write = new ctor(rab);
+    for (let i = 0; i < 4; ++i) {
+      WriteToTypedArray(ta_write, i, i);
+    }
+
+    {
+      let [a, b, c, d, e] = fixedLength;
+      assertEquals([0, 1, 2, 3], ToNumbers([a, b, c, d]));
+      assertEquals(undefined, e);
+    }
+
+    {
+      let [a, b, c] = fixedLengthWithOffset;
+      assertEquals([2, 3], ToNumbers([a, b]));
+      assertEquals(undefined, c);
+    }
+
+    {
+      let [a, b, c, d, e] = lengthTracking;
+      assertEquals([0, 1, 2, 3], ToNumbers([a, b, c, d]));
+      assertEquals(undefined, e);
+    }
+
+    {
+      let [a, b, c] = lengthTrackingWithOffset;
+      assertEquals([2, 3], ToNumbers([a, b]));
+      assertEquals(undefined, c);
+    }
+
+    // Shrink so that fixed length TAs go out of bounds.
+    rab.resize(3 * ctor.BYTES_PER_ELEMENT);
+
+    assertThrows(() => { let [a, b, c] = fixedLength; }, TypeError);
+    assertThrows(() => { let [a, b, c] = fixedLengthWithOffset; }, TypeError);
+
+    {
+      let [a, b, c, d] = lengthTracking;
+      assertEquals([0, 1, 2], ToNumbers([a, b, c]));
+      assertEquals(undefined, d);
+    }
+
+    {
+      let [a, b] = lengthTrackingWithOffset;
+      assertEquals([2], ToNumbers([a]));
+      assertEquals(undefined, b);
+    }
+
+    // Shrink so that the TAs with offset go out of bounds.
+    rab.resize(1 * ctor.BYTES_PER_ELEMENT);
+
+    assertThrows(() => { let [a, b, c] = fixedLength; }, TypeError);
+    assertThrows(() => { let [a, b, c] = fixedLengthWithOffset; }, TypeError);
+    assertThrows(() => { let [a, b, c] = lengthTrackingWithOffset; },
+                 TypeError);
+
+    {
+      let [a, b] = lengthTracking;
+      assertEquals([0], ToNumbers([a]));
+      assertEquals(undefined, b);
+    }
+
+    // Shrink to 0.
+    rab.resize(0);
+
+    assertThrows(() => { let [a, b, c] = fixedLength; }, TypeError);
+    assertThrows(() => { let [a, b, c] = fixedLengthWithOffset; }, TypeError);
+    assertThrows(() => { let [a, b, c] = lengthTrackingWithOffset; },
+                 TypeError);
+
+    {
+      let [a] = lengthTracking;
+      assertEquals(undefined, a);
+    }
+
+    // Grow so that all TAs are back in-bounds. The new memory is zeroed.
+    rab.resize(6 * ctor.BYTES_PER_ELEMENT);
+
+    {
+      let [a, b, c, d, e] = fixedLength;
+      assertEquals([0, 0, 0, 0], ToNumbers([a, b, c, d]));
+      assertEquals(undefined, e);
+    }
+
+    {
+      let [a, b, c] = fixedLengthWithOffset;
+      assertEquals([0, 0], ToNumbers([a, b]));
+      assertEquals(undefined, c);
+    }
+
+    {
+      let [a, b, c, d, e, f, g] = lengthTracking;
+      assertEquals([0, 0, 0, 0, 0, 0], ToNumbers([a, b, c, d, e, f]));
+      assertEquals(undefined, g);
+    }
+
+    {
+      let [a, b, c, d, e] = lengthTrackingWithOffset;
+      assertEquals([0, 0, 0, 0], ToNumbers([a, b, c, d]));
+      assertEquals(undefined, e);
+    }
+  }
+}());
+
+(function TestFill() {
+  for (let ctor of ctors) {
+    const rab = CreateResizableArrayBuffer(4 * ctor.BYTES_PER_ELEMENT,
+                                           8 * ctor.BYTES_PER_ELEMENT);
+    const fixedLength = new ctor(rab, 0, 4);
+    const fixedLengthWithOffset = new ctor(rab, 2 * ctor.BYTES_PER_ELEMENT, 2);
+    const lengthTracking = new ctor(rab, 0);
+    const lengthTrackingWithOffset = new ctor(rab, 2 * ctor.BYTES_PER_ELEMENT);
+
+    assertEquals([0, 0, 0, 0], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(fixedLength, 1);
+    assertEquals([1, 1, 1, 1], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(fixedLengthWithOffset, 2);
+    assertEquals([1, 1, 2, 2], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTracking, 3);
+    assertEquals([3, 3, 3, 3], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTrackingWithOffset, 4);
+    assertEquals([3, 3, 4, 4], ReadDataFromBuffer(rab, ctor));
+
+    // Shrink so that fixed length TAs go out of bounds.
+    rab.resize(3 * ctor.BYTES_PER_ELEMENT);
+
+    assertThrows(() => FillHelper(fixedLength, 5), TypeError);
+    assertEquals([3, 3, 4], ReadDataFromBuffer(rab, ctor));
+
+    assertThrows(() => FillHelper(fixedLengthWithOffset, 6), TypeError);
+    assertEquals([3, 3, 4], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTracking, 7);
+    assertEquals([7, 7, 7], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTrackingWithOffset, 8);
+    assertEquals([7, 7, 8], ReadDataFromBuffer(rab, ctor));
+
+    // Shrink so that the TAs with offset go out of bounds.
+    rab.resize(1 * ctor.BYTES_PER_ELEMENT);
+
+    assertThrows(() => FillHelper(fixedLength, 9), TypeError);
+    assertEquals([7], ReadDataFromBuffer(rab, ctor));
+
+    assertThrows(() => FillHelper(fixedLengthWithOffset, 10), TypeError);
+    assertEquals([7], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTracking, 11);
+    assertEquals([11], ReadDataFromBuffer(rab, ctor));
+
+    assertThrows(() => FillHelper(lengthTrackingWithOffset, 12), TypeError);
+    assertEquals([11], ReadDataFromBuffer(rab, ctor));
+
+    // Grow so that all TAs are back in-bounds.
+    rab.resize(6 * ctor.BYTES_PER_ELEMENT);
+
+    FillHelper(fixedLength, 13);
+    assertEquals([13, 13, 13, 13, 0, 0], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(fixedLengthWithOffset, 14);
+    assertEquals([13, 13, 14, 14, 0, 0], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTracking, 15);
+    assertEquals([15, 15, 15, 15, 15, 15], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTrackingWithOffset, 16);
+    assertEquals([15, 15, 16, 16, 16, 16], ReadDataFromBuffer(rab, ctor));
+
+    // Filling with non-undefined start & end.
+    FillHelper(fixedLength, 17, 1, 3);
+    assertEquals([15, 17, 17, 16, 16, 16], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(fixedLengthWithOffset, 18, 1, 2);
+    assertEquals([15, 17, 17, 18, 16, 16], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTracking, 19, 1, 3);
+    assertEquals([15, 19, 19, 18, 16, 16], ReadDataFromBuffer(rab, ctor));
+
+    FillHelper(lengthTrackingWithOffset, 20, 1, 2);
+    assertEquals([15, 19, 19, 20, 16, 16], ReadDataFromBuffer(rab, ctor));
+  }
+})();
+
+(function FillParameterConversionResizes() {
+  for (let ctor of ctors) {
+    const rab = CreateResizableArrayBuffer(4 * ctor.BYTES_PER_ELEMENT,
+                                           8 * ctor.BYTES_PER_ELEMENT);
+    const fixedLength = new ctor(rab, 0, 4);
+
+    let evil = { valueOf: () => { rab.resize(2); return 0;}};
+    assertThrows(() => { FillHelper(fixedLength, evil, 1, 2); }, TypeError);
+    rab.resize(4 * ctor.BYTES_PER_ELEMENT);
+    assertThrows(() => { FillHelper(fixedLength, 3, evil, 2); }, TypeError);
+    rab.resize(4 * ctor.BYTES_PER_ELEMENT);
+    assertThrows(() => { FillHelper(fixedLength, 3, 1, evil); }, TypeError);
+  }
+})();
+
+(function At() {
+  for (let ctor of ctors) {
+    const rab = CreateResizableArrayBuffer(4 * ctor.BYTES_PER_ELEMENT,
+                                           8 * ctor.BYTES_PER_ELEMENT);
+    const fixedLength = new ctor(rab, 0, 4);
+    const fixedLengthWithOffset = new ctor(rab, 2 * ctor.BYTES_PER_ELEMENT, 2);
+    const lengthTracking = new ctor(rab, 0);
+    const lengthTrackingWithOffset = new ctor(rab, 2 * ctor.BYTES_PER_ELEMENT);
+
+    // Write some data into the array.
+    let ta_write = new ctor(rab);
+    for (let i = 0; i < 4; ++i) {
+      WriteToTypedArray(ta_write, i, i);
+    }
+
+    assertEquals(3, AtHelper(fixedLength, -1));
+    assertEquals(3, AtHelper(lengthTracking, -1));
+    assertEquals(3, AtHelper(fixedLengthWithOffset, -1));
+    assertEquals(3, AtHelper(lengthTrackingWithOffset, -1));
+
+    // Shrink so that fixed length TAs go out of bounds.
+    rab.resize(3 * ctor.BYTES_PER_ELEMENT);
+
+    assertThrows(() => { AtHelper(fixedLength, -1); });
+    assertThrows(() => { AtHelper(fixedLengthWithOffset, -1); });
+
+    assertEquals(2, AtHelper(lengthTracking, -1));
+    assertEquals(2, AtHelper(lengthTrackingWithOffset, -1));
+
+    // Shrink so that the TAs with offset go out of bounds.
+    rab.resize(1 * ctor.BYTES_PER_ELEMENT);
+
+    assertThrows(() => { AtHelper(fixedLength, -1); });
+    assertThrows(() => { AtHelper(fixedLengthWithOffset, -1); });
+    assertEquals(0, AtHelper(lengthTracking, -1));
+    assertThrows(() => { AtHelper(lengthTrackingWithOffset, -1); });
+
+    // Grow so that all TAs are back in-bounds. New memory is zeroed.
+    rab.resize(6 * ctor.BYTES_PER_ELEMENT);
+    assertEquals(0, AtHelper(fixedLength, -1));
+    assertEquals(0, AtHelper(lengthTracking, -1));
+    assertEquals(0, AtHelper(fixedLengthWithOffset, -1));
+    assertEquals(0, AtHelper(lengthTrackingWithOffset, -1));
+  }
+})();
+
+(function AtParameterConversionResizes() {
+  for (let ctor of ctors) {
+    const rab = CreateResizableArrayBuffer(4 * ctor.BYTES_PER_ELEMENT,
+                                           8 * ctor.BYTES_PER_ELEMENT);
+    const fixedLength = new ctor(rab, 0, 4);
+
+    let evil = { valueOf: () => { rab.resize(2); return 0;}};
+    assertEquals(undefined, AtHelper(fixedLength, evil));
+  }
+
+  for (let ctor of ctors) {
+    const rab = CreateResizableArrayBuffer(4 * ctor.BYTES_PER_ELEMENT,
+                                           8 * ctor.BYTES_PER_ELEMENT);
+    const lengthTracking = new ctor(rab);
+
+    let evil = { valueOf: () => { rab.resize(2); return -1;}};
+    // The TypedArray is *not* out of bounds since it's length-tracking.
+    assertEquals(undefined, AtHelper(lengthTracking, evil));
+  }
+})();

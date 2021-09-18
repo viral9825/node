@@ -27,16 +27,16 @@
 
 #include <stdlib.h>
 
-#include "src/init/v8.h"
-
+#include "src/base/vector.h"
 #include "src/codegen/code-factory.h"
 #include "src/codegen/macro-assembler.h"
 #include "src/debug/debug.h"
 #include "src/diagnostics/disasm.h"
 #include "src/diagnostics/disassembler.h"
 #include "src/execution/frames-inl.h"
-#include "src/utils/ostreams.h"
+#include "src/init/v8.h"
 #include "src/objects/objects-inl.h"
+#include "src/utils/ostreams.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -45,7 +45,6 @@ namespace internal {
 #define __ assm.
 
 TEST(DisasmX64) {
-  CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
   v8::internal::byte buffer[8192];
@@ -667,10 +666,15 @@ TEST(DisasmX64) {
 
       __ vmovdqa(xmm4, xmm5);
       __ vmovdqa(xmm4, Operand(rbx, rcx, times_4, 10000));
+      __ vmovdqa(ymm4, ymm5);
+      __ vmovdqa(xmm4, Operand(rbx, rcx, times_4, 10000));
 
       __ vmovdqu(xmm9, Operand(rbx, rcx, times_4, 10000));
       __ vmovdqu(Operand(rbx, rcx, times_4, 10000), xmm0);
       __ vmovdqu(xmm4, xmm5);
+      __ vmovdqu(ymm9, Operand(rbx, rcx, times_4, 10000));
+      __ vmovdqu(Operand(rbx, rcx, times_4, 10000), ymm0);
+      __ vmovdqu(ymm4, ymm5);
 
       __ vmovhlps(xmm1, xmm3, xmm5);
       __ vmovlps(xmm8, xmm9, Operand(rbx, rcx, times_4, 10000));
@@ -739,6 +743,8 @@ TEST(DisasmX64) {
       __ vcmpnltps(xmm5, xmm4, Operand(rbx, rcx, times_4, 10000));
       __ vcmpnleps(xmm5, xmm4, xmm1);
       __ vcmpnleps(xmm5, xmm4, Operand(rbx, rcx, times_4, 10000));
+      __ vcmpgeps(xmm5, xmm4, xmm1);
+      __ vcmpgeps(xmm5, xmm4, Operand(rbx, rcx, times_4, 10000));
       __ vcmppd(xmm5, xmm4, xmm1, 1);
       __ vcmppd(xmm5, xmm4, Operand(rbx, rcx, times_4, 10000), 1);
       __ vcmpeqpd(xmm5, xmm4, xmm1);
@@ -758,14 +764,18 @@ TEST(DisasmX64) {
 
 #define EMIT_SSE_UNOP_AVXINSTR(instruction, notUsed1, notUsed2) \
   __ v##instruction(xmm10, xmm1);                               \
-  __ v##instruction(xmm10, Operand(rbx, rcx, times_4, 10000));
+  __ v##instruction(xmm10, Operand(rbx, rcx, times_4, 10000));  \
+  __ v##instruction(ymm10, ymm1);                               \
+  __ v##instruction(ymm10, Operand(rbx, rcx, times_4, 10000));
 
       SSE_UNOP_INSTRUCTION_LIST(EMIT_SSE_UNOP_AVXINSTR)
 #undef EMIT_SSE_UNOP_AVXINSTR
 
-#define EMIT_SSE_BINOP_AVXINSTR(instruction, notUsed1, notUsed2) \
-  __ v##instruction(xmm10, xmm5, xmm1);                          \
-  __ v##instruction(xmm10, xmm5, Operand(rbx, rcx, times_4, 10000));
+#define EMIT_SSE_BINOP_AVXINSTR(instruction, notUsed1, notUsed2)     \
+  __ v##instruction(xmm10, xmm5, xmm1);                              \
+  __ v##instruction(xmm10, xmm5, Operand(rbx, rcx, times_4, 10000)); \
+  __ v##instruction(ymm10, ymm5, ymm1);                              \
+  __ v##instruction(ymm10, ymm5, Operand(rbx, rcx, times_4, 10000));
 
       SSE_BINOP_INSTRUCTION_LIST(EMIT_SSE_BINOP_AVXINSTR)
 #undef EMIT_SSE_BINOP_AVXINSTR
@@ -869,13 +879,6 @@ TEST(DisasmX64) {
     if (CpuFeatures::IsSupported(AVX2)) {
       CpuFeatureScope scope(&assm, AVX2);
       __ vbroadcastss(xmm1, xmm2);
-    }
-  }
-
-  // AVX2 instructions.
-  {
-    if (CpuFeatures::IsSupported(AVX2)) {
-      CpuFeatureScope scope(&assm, AVX2);
 #define EMIT_AVX2_BROADCAST(instruction, notUsed1, notUsed2, notUsed3, \
                             notUsed4)                                  \
   __ instruction(xmm0, xmm1);                                          \
@@ -1051,6 +1054,59 @@ TEST(DisasmX64) {
   disasm::Disassembler::Disassemble(stdout, reinterpret_cast<byte*>(begin),
                                     reinterpret_cast<byte*>(end));
 #endif
+}
+
+// Tests that compares the checks the disassembly output with an expected
+// string.
+UNINITIALIZED_TEST(DisasmX64CheckOutput) {
+  v8::internal::byte buffer[8192];
+  Assembler assm(AssemblerOptions{},
+                 ExternalAssemblerBuffer(buffer, sizeof buffer));
+  base::EmbeddedVector<char, 128> disasm_buffer;
+  disasm::NameConverter converter;
+  disasm::Disassembler disassembler(converter);
+
+  std::string actual, expected;
+  int pcoffset = 0;
+  // Helper macro to compare the disassembly of an assembler function call with
+  // the expected disassembly output. We reuse |Assembler|, so we need to keep
+  // track of the offset into |buffer| which the Assembler has used, and
+  // disassemble the instruction at that offset.
+#define COMPARE(str, ASM)                                           \
+  assm.ASM;                                                         \
+  disassembler.InstructionDecode(disasm_buffer, buffer + pcoffset); \
+  pcoffset = assm.pc_offset();                                      \
+  actual = std::string{disasm_buffer.begin()};                      \
+  expected = str;                                                   \
+  CHECK_EQ(expected, actual);
+
+  COMPARE("48054e61bc00       REX.W add rax,0xbc614e",
+          addq(rax, Immediate(12345678)));
+}
+
+UNINITIALIZED_TEST(DisasmX64YMMRegister) {
+  if (!CpuFeatures::IsSupported(AVX)) return;
+  v8::internal::byte buffer[8192];
+  Assembler assm(AssemblerOptions{},
+                 ExternalAssemblerBuffer(buffer, sizeof buffer));
+  CpuFeatureScope fscope(&assm, AVX);
+
+  __ vmovdqa(ymm0, ymm1);
+
+  base::Vector<char> actual = base::Vector<char>::New(37);
+  disasm::NameConverter converter;
+  disasm::Disassembler disassembler(converter);
+  disassembler.InstructionDecode(actual, buffer);
+#ifdef OBJECT_PRINT
+  fprintf(stdout, "Disassembled buffer: %s\n", actual.begin());
+#endif
+
+  base::Vector<const char> expected =
+      base::StaticCharVector("c5fd6fc1           vmovdqa ymm0,ymm1\0");
+
+  CHECK_EQ(expected, actual);
+
+  actual.Dispose();
 }
 
 #undef __

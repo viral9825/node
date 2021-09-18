@@ -27,6 +27,7 @@ namespace U_ICU_NAMESPACE {
 class BreakIterator;
 class Collator;
 class FormattedValue;
+class StringEnumeration;
 class UnicodeString;
 }  // namespace U_ICU_NAMESPACE
 
@@ -65,72 +66,6 @@ class Intl {
       const std::set<std::string>& available_locales, Handle<Object> locales_in,
       Handle<Object> options_in);
 
-  // ECMA402 9.2.10. GetOption( options, property, type, values, fallback)
-  // ecma402/#sec-getoption
-  //
-  // This is specialized for the case when type is string.
-  //
-  // Instead of passing undefined for the values argument as the spec
-  // defines, pass in an empty vector.
-  //
-  // Returns true if options object has the property and stores the
-  // result in value. Returns false if the value is not found. The
-  // caller is required to use fallback value appropriately in this
-  // case.
-  //
-  // service is a string denoting the type of Intl object; used when
-  // printing the error message.
-  V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT static Maybe<bool> GetStringOption(
-      Isolate* isolate, Handle<JSReceiver> options, const char* property,
-      std::vector<const char*> values, const char* service,
-      std::unique_ptr<char[]>* result);
-
-  // A helper template to get string from option into a enum.
-  // The enum in the enum_values is the corresponding value to the strings
-  // in the str_values. If the option does not contains name,
-  // default_value will be return.
-  template <typename T>
-  V8_WARN_UNUSED_RESULT static Maybe<T> GetStringOption(
-      Isolate* isolate, Handle<JSReceiver> options, const char* name,
-      const char* method, const std::vector<const char*>& str_values,
-      const std::vector<T>& enum_values, T default_value) {
-    DCHECK_EQ(str_values.size(), enum_values.size());
-    std::unique_ptr<char[]> cstr;
-    Maybe<bool> found = Intl::GetStringOption(isolate, options, name,
-                                              str_values, method, &cstr);
-    MAYBE_RETURN(found, Nothing<T>());
-    if (found.FromJust()) {
-      DCHECK_NOT_NULL(cstr.get());
-      for (size_t i = 0; i < str_values.size(); i++) {
-        if (strcmp(cstr.get(), str_values[i]) == 0) {
-          return Just(enum_values[i]);
-        }
-      }
-      UNREACHABLE();
-    }
-    return Just(default_value);
-  }
-
-  // ECMA402 9.2.10. GetOption( options, property, type, values, fallback)
-  // ecma402/#sec-getoption
-  //
-  // This is specialized for the case when type is boolean.
-  //
-  // Returns true if options object has the property and stores the
-  // result in value. Returns false if the value is not found. The
-  // caller is required to use fallback value appropriately in this
-  // case.
-  //
-  // service is a string denoting the type of Intl object; used when
-  // printing the error message.
-  V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT static Maybe<bool> GetBoolOption(
-      Isolate* isolate, Handle<JSReceiver> options, const char* property,
-      const char* service, bool* result);
-
-  V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT static Maybe<int> GetNumberOption(
-      Isolate* isolate, Handle<JSReceiver> options, Handle<String> property,
-      int min, int max, int fallback);
-
   // https://tc39.github.io/ecma402/#sec-canonicalizelocalelist
   // {only_return_one_result} is an optimization for callers that only
   // care about the first result.
@@ -141,6 +76,10 @@ class Intl {
   // ecma-402 #sec-intl.getcanonicallocales
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSArray> GetCanonicalLocales(
       Isolate* isolate, Handle<Object> locales);
+
+  // ecma-402 #sec-intl.supportedvaluesof
+  V8_WARN_UNUSED_RESULT static MaybeHandle<JSArray> SupportedValuesOf(
+      Isolate* isolate, Handle<Object> key);
 
   // For locale sensitive functions
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> StringLocaleConvertCase(
@@ -153,13 +92,14 @@ class Intl {
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> ConvertToLower(
       Isolate* isolate, Handle<String> s);
 
-  V8_WARN_UNUSED_RESULT static MaybeHandle<Object> StringLocaleCompare(
+  V8_WARN_UNUSED_RESULT static base::Optional<int> StringLocaleCompare(
       Isolate* isolate, Handle<String> s1, Handle<String> s2,
       Handle<Object> locales, Handle<Object> options, const char* method);
 
-  V8_WARN_UNUSED_RESULT static Handle<Object> CompareStrings(
-      Isolate* isolate, const icu::Collator& collator, Handle<String> s1,
-      Handle<String> s2);
+  V8_WARN_UNUSED_RESULT static int CompareStrings(Isolate* isolate,
+                                                  const icu::Collator& collator,
+                                                  Handle<String> s1,
+                                                  Handle<String> s2);
 
   // ecma402/#sup-properties-of-the-number-prototype-object
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> NumberToLocaleString(
@@ -331,13 +271,17 @@ class Intl {
 
   static const std::set<std::string>& GetAvailableLocalesForDateFormat();
 
-  // ecma402/#sec-getoptionsobject
-  V8_WARN_UNUSED_RESULT static MaybeHandle<JSReceiver> GetOptionsObject(
-      Isolate* isolate, Handle<Object> options, const char* service);
+  V8_WARN_UNUSED_RESULT static MaybeHandle<JSArray> ToJSArray(
+      Isolate* isolate, const char* unicode_key,
+      icu::StringEnumeration* enumeration,
+      const std::function<bool(const char*)>& removes, bool sort);
 
-  // ecma402/#sec-coerceoptionstoobject
-  V8_WARN_UNUSED_RESULT static MaybeHandle<JSReceiver> CoerceOptionsToObject(
-      Isolate* isolate, Handle<Object> options, const char* service);
+  static bool RemoveCollation(const char* collation);
+
+  static std::set<std::string> SanctionedSimpleUnits();
+
+  V8_WARN_UNUSED_RESULT static MaybeHandle<JSArray> AvailableCalendars(
+      Isolate* isolate);
 };
 
 }  // namespace internal

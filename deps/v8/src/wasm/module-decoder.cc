@@ -50,8 +50,8 @@ const char* ExternalKindName(ImportExportKindCode kind) {
       return "memory";
     case kExternalGlobal:
       return "global";
-    case kExternalException:
-      return "exception";
+    case kExternalTag:
+      return "tag";
   }
   return "unknown";
 }
@@ -84,8 +84,8 @@ const char* SectionName(SectionCode code) {
       return "Element";
     case kDataSectionCode:
       return "Data";
-    case kExceptionSectionCode:
-      return "Exception";
+    case kTagSectionCode:
+      return "Tag";
     case kDataCountSectionCode:
       return "DataCount";
     case kNameSectionCode:
@@ -413,7 +413,7 @@ class ModuleDecoderImpl : public Decoder {
                                kCodeSectionCode))
           return;
         break;
-      case kExceptionSectionCode:
+      case kTagSectionCode:
         if (!CheckUnorderedSection(section_code)) return;
         if (!CheckSectionOrder(section_code, kMemorySectionCode,
                                kGlobalSectionCode))
@@ -526,9 +526,9 @@ class ModuleDecoderImpl : public Decoder {
       case kDataCountSectionCode:
         DecodeDataCountSection();
         break;
-      case kExceptionSectionCode:
+      case kTagSectionCode:
         if (enabled_features_.has_eh()) {
-          DecodeExceptionSection();
+          DecodeTagSection();
         } else {
           errorf(pc(),
                  "unexpected section <%s> (enable with --experimental-wasm-eh)",
@@ -550,19 +550,40 @@ class ModuleDecoderImpl : public Decoder {
   }
 
   void DecodeTypeSection() {
-    uint32_t signatures_count = consume_count("types count", kV8MaxWasmTypes);
-    module_->types.reserve(signatures_count);
-    for (uint32_t i = 0; ok() && i < signatures_count; ++i) {
+    uint32_t types_count = consume_count("types count", kV8MaxWasmTypes);
+    module_->types.reserve(types_count);
+    for (uint32_t i = 0; ok() && i < types_count; ++i) {
       TRACE("DecodeSignature[%d] module+%d\n", i,
             static_cast<int>(pc_ - start_));
       uint8_t kind = consume_u8("type kind");
       switch (kind) {
-        case kWasmFunctionTypeCode: {
+        case kWasmFunctionTypeCode:
+        case kWasmFunctionSubtypeCode: {
           const FunctionSig* s = consume_sig(module_->signature_zone.get());
-          module_->add_signature(s);
+          uint32_t super_index = kNoSuperType;
+          if (kind == kWasmFunctionSubtypeCode) {
+            if (!enabled_features_.has_gc()) {
+              errorf(pc(),
+                     "invalid function type definition, enable with "
+                     "--experimental-wasm-gc");
+              break;
+            }
+            HeapType super_type = consume_super_type();
+            if (super_type == HeapType::kFunc) {
+              super_index = kGenericSuperType;
+            } else if (super_type.is_index()) {
+              super_index = super_type.representation();
+            } else {
+              errorf(pc(), "type %d: invalid supertype %d", i,
+                     super_type.code());
+              break;
+            }
+          }
+          module_->add_signature(s, super_index);
           break;
         }
-        case kWasmStructTypeCode: {
+        case kWasmStructTypeCode:
+        case kWasmStructSubtypeCode: {
           if (!enabled_features_.has_gc()) {
             errorf(pc(),
                    "invalid struct type definition, enable with "
@@ -570,12 +591,26 @@ class ModuleDecoderImpl : public Decoder {
             break;
           }
           const StructType* s = consume_struct(module_->signature_zone.get());
-          module_->add_struct_type(s);
+          uint32_t super_index = kNoSuperType;
+          if (kind == kWasmStructSubtypeCode) {
+            HeapType super_type = consume_super_type();
+            if (super_type == HeapType::kData) {
+              super_index = kGenericSuperType;
+            } else if (super_type.is_index()) {
+              super_index = super_type.representation();
+            } else {
+              errorf(pc(), "type %d: invalid supertype %d", i,
+                     super_type.code());
+              break;
+            }
+          }
+          module_->add_struct_type(s, super_index);
           // TODO(7748): Should we canonicalize struct types, like
           // {signature_map} does for function signatures?
           break;
         }
-        case kWasmArrayTypeCode: {
+        case kWasmArrayTypeCode:
+        case kWasmArraySubtypeCode: {
           if (!enabled_features_.has_gc()) {
             errorf(pc(),
                    "invalid array type definition, enable with "
@@ -583,13 +618,66 @@ class ModuleDecoderImpl : public Decoder {
             break;
           }
           const ArrayType* type = consume_array(module_->signature_zone.get());
-          module_->add_array_type(type);
+          uint32_t super_index = kNoSuperType;
+          if (kind == kWasmArraySubtypeCode) {
+            HeapType super_type = consume_super_type();
+            if (super_type == HeapType::kData) {
+              super_index = kGenericSuperType;
+            } else if (super_type.is_index()) {
+              super_index = super_type.representation();
+            } else {
+              errorf(pc(), "type %d: invalid supertype %d", i,
+                     super_type.code());
+              break;
+            }
+          }
+          module_->add_array_type(type, super_index);
           break;
         }
         default:
           errorf(pc(), "unknown type form: %d", kind);
           break;
       }
+    }
+    // Check validity of explicitly defined supertypes.
+    const WasmModule* module = module_.get();
+    for (uint32_t i = 0; ok() && i < types_count; ++i) {
+      uint32_t explicit_super = module_->supertype(i);
+      if (explicit_super == kNoSuperType) continue;
+      if (explicit_super == kGenericSuperType) continue;
+      DCHECK_LT(explicit_super, types_count);  // {consume_super_type} checks.
+      // Only types that have an explicit supertype themselves can be explicit
+      // supertypes of other types.
+      if (!module->has_supertype(explicit_super)) {
+        errorf("type %d has invalid explicit supertype %d", i, explicit_super);
+        continue;
+      }
+      int depth = GetSubtypingDepth(module, i);
+      if (depth > static_cast<int>(kV8MaxRttSubtypingDepth)) {
+        errorf("type %d: subtyping depth is greater than allowed", i);
+        continue;
+      }
+      if (depth == -1) {
+        errorf("type %d: cyclic inheritance", i);
+        continue;
+      }
+      switch (module_->type_kinds[i]) {
+        case kWasmStructTypeCode:
+          if (!module->has_struct(explicit_super)) break;
+          if (!StructIsSubtypeOf(i, explicit_super, module, module)) break;
+          continue;
+        case kWasmArrayTypeCode:
+          if (!module->has_array(explicit_super)) break;
+          if (!ArrayIsSubtypeOf(i, explicit_super, module, module)) break;
+          continue;
+        case kWasmFunctionTypeCode:
+          if (!module->has_signature(explicit_super)) break;
+          if (!FunctionIsSubtypeOf(i, explicit_super, module, module)) break;
+          continue;
+        default:
+          UNREACHABLE();
+      }
+      errorf("type %d has invalid explicit supertype %d", i, explicit_super);
     }
     module_->signature_map.Freeze();
   }
@@ -680,17 +768,17 @@ class ModuleDecoderImpl : public Decoder {
           }
           break;
         }
-        case kExternalException: {
-          // ===== Imported exception ==========================================
+        case kExternalTag: {
+          // ===== Imported tag ================================================
           if (!enabled_features_.has_eh()) {
             errorf(pos, "unknown import kind 0x%02x", import->kind);
             break;
           }
-          import->index = static_cast<uint32_t>(module_->exceptions.size());
-          const WasmExceptionSig* exception_sig = nullptr;
+          import->index = static_cast<uint32_t>(module_->tags.size());
+          const WasmTagSig* tag_sig = nullptr;
           consume_exception_attribute();  // Attribute ignored for now.
-          consume_exception_sig_index(module_.get(), &exception_sig);
-          module_->exceptions.emplace_back(exception_sig);
+          consume_tag_sig_index(module_.get(), &tag_sig);
+          module_->tags.emplace_back(tag_sig);
           break;
         }
         default:
@@ -845,13 +933,13 @@ class ModuleDecoderImpl : public Decoder {
           }
           break;
         }
-        case kExternalException: {
+        case kExternalTag: {
           if (!enabled_features_.has_eh()) {
             errorf(pos, "invalid export kind 0x%02x", exp->kind);
             break;
           }
-          WasmException* exception = nullptr;
-          exp->index = consume_exception_index(module_.get(), &exception);
+          WasmTag* tag = nullptr;
+          exp->index = consume_tag_index(module_.get(), &tag);
           break;
         }
         default:
@@ -1259,16 +1347,14 @@ class ModuleDecoderImpl : public Decoder {
         consume_count("data segments count", kV8MaxWasmDataSegments);
   }
 
-  void DecodeExceptionSection() {
-    uint32_t exception_count =
-        consume_count("exception count", kV8MaxWasmExceptions);
-    for (uint32_t i = 0; ok() && i < exception_count; ++i) {
-      TRACE("DecodeException[%d] module+%d\n", i,
-            static_cast<int>(pc_ - start_));
-      const WasmExceptionSig* exception_sig = nullptr;
+  void DecodeTagSection() {
+    uint32_t tag_count = consume_count("tag count", kV8MaxWasmTags);
+    for (uint32_t i = 0; ok() && i < tag_count; ++i) {
+      TRACE("DecodeTag[%d] module+%d\n", i, static_cast<int>(pc_ - start_));
+      const WasmTagSig* tag_sig = nullptr;
       consume_exception_attribute();  // Attribute ignored for now.
-      consume_exception_sig_index(module_.get(), &exception_sig);
-      module_->exceptions.emplace_back(exception_sig);
+      consume_tag_sig_index(module_.get(), &tag_sig);
+      module_->tags.emplace_back(tag_sig);
     }
   }
 
@@ -1544,12 +1630,11 @@ class ModuleDecoderImpl : public Decoder {
     return sig_index;
   }
 
-  uint32_t consume_exception_sig_index(WasmModule* module,
-                                       const FunctionSig** sig) {
+  uint32_t consume_tag_sig_index(WasmModule* module, const FunctionSig** sig) {
     const byte* pos = pc_;
     uint32_t sig_index = consume_sig_index(module, sig);
     if (*sig && (*sig)->return_count() != 0) {
-      errorf(pos, "exception signature %u has non-void return", sig_index);
+      errorf(pos, "tag signature %u has non-void return", sig_index);
       *sig = nullptr;
       return 0;
     }
@@ -1579,8 +1664,8 @@ class ModuleDecoderImpl : public Decoder {
     return consume_index("table index", &module->tables, table);
   }
 
-  uint32_t consume_exception_index(WasmModule* module, WasmException** except) {
-    return consume_index("exception index", &module->exceptions, except);
+  uint32_t consume_tag_index(WasmModule* module, WasmTag** tag) {
+    return consume_index("tag index", &module->tags, tag);
   }
 
   template <typename T>
@@ -1739,6 +1824,15 @@ class ModuleDecoderImpl : public Decoder {
         this, this->pc(), &type_length, module_.get(),
         origin_ == kWasmOrigin ? enabled_features_ : WasmFeatures::None());
     consume_bytes(type_length, "value type");
+    return result;
+  }
+
+  HeapType consume_super_type() {
+    uint32_t type_length;
+    HeapType result = value_type_reader::read_heap_type<kFullValidation>(
+        this, this->pc(), &type_length, module_.get(),
+        origin_ == kWasmOrigin ? enabled_features_ : WasmFeatures::None());
+    consume_bytes(type_length, "supertype");
     return result;
   }
 

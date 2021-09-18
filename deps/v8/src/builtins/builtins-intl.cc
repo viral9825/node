@@ -30,6 +30,7 @@
 #include "src/objects/js-segmenter-inl.h"
 #include "src/objects/js-segments-inl.h"
 #include "src/objects/objects-inl.h"
+#include "src/objects/option-utils.h"
 #include "src/objects/property-descriptor.h"
 #include "src/objects/smi.h"
 #include "unicode/brkiter.h"
@@ -236,7 +237,7 @@ Handle<JSFunction> CreateBoundFunction(Isolate* isolate,
   Handle<SharedFunctionInfo> info =
       isolate->factory()->NewSharedFunctionInfoForBuiltin(
           isolate->factory()->empty_string(), builtin, kNormalFunction);
-  info->set_internal_formal_parameter_count(len);
+  info->set_internal_formal_parameter_count(JSParameterCount(len));
   info->set_length(len);
 
   return Factory::JSFunctionBuilder{isolate, info, context}
@@ -576,6 +577,13 @@ BUILTIN(IntlGetCanonicalLocales) {
                            Intl::GetCanonicalLocales(isolate, locales));
 }
 
+BUILTIN(IntlSupportedValuesOf) {
+  HandleScope scope(isolate);
+  Handle<Object> locales = args.atOrUndefined(isolate, 1);
+
+  RETURN_RESULT_OR_FAILURE(isolate, Intl::SupportedValuesOf(isolate, locales));
+}
+
 BUILTIN(ListFormatConstructor) {
   HandleScope scope(isolate);
 
@@ -649,8 +657,7 @@ BUILTIN(LocaleConstructor) {
   // 10. Set options to ? CoerceOptionsToObject(options).
   Handle<JSReceiver> options_object;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, options_object,
-      Intl::CoerceOptionsToObject(isolate, options, method));
+      isolate, options_object, CoerceOptionsToObject(isolate, options, method));
 
   RETURN_RESULT_OR_FAILURE(
       isolate, JSLocale::New(isolate, map, locale_string, options_object));
@@ -1002,7 +1009,8 @@ BUILTIN(CollatorInternalCompare) {
   // 7. Return CompareStrings(collator, X, Y).
   icu::Collator* icu_collator = collator->icu_collator().raw();
   CHECK_NOT_NULL(icu_collator);
-  return *Intl::CompareStrings(isolate, *icu_collator, string_x, string_y);
+  return Smi::FromInt(
+      Intl::CompareStrings(isolate, *icu_collator, string_x, string_y));
 }
 
 // ecma402 #sec-%segmentiteratorprototype%.next
